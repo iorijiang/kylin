@@ -83,8 +83,12 @@ public class TableService extends BasicService {
         return tables;
     }
 
-    public TableDesc getTableDescByName(String tableName) {
-        return getMetadataManager().getTableDesc(tableName);
+    public TableDesc getTableDescByName(String tableName, boolean withExt) {
+        TableDesc table =  getMetadataManager().getTableDesc(tableName);
+        if(withExt){
+            table = cloneTableDesc(table);
+        }
+        return table;
     }
 
     @PreAuthorize(Constant.ACCESS_HAS_ROLE_MODELER + " or " + Constant.ACCESS_HAS_ROLE_ADMIN)
@@ -128,7 +132,7 @@ public class TableService extends BasicService {
         //remove streaming info
         String[] dbTableName = HadoopUtil.parseHiveTableName(tableName);
         tableName = dbTableName[0] + "." + dbTableName[1];
-        TableDesc desc = getTableDescByName(tableName);
+        TableDesc desc = getMetadataManager().getTableDesc(tableName);
         if (desc == null)
             return false;
         tableType = desc.getSourceType();
@@ -206,39 +210,45 @@ public class TableService extends BasicService {
         return results;
     }
 
+    private TableDescResponse cloneTableDesc(TableDesc table) {
+        TableExtDesc tableExtDesc = getMetadataManager().getTableExt(table.getIdentity());
+
+        // Clone TableDesc
+        TableDescResponse rtableDesc = new TableDescResponse(table);
+        Map<String, Long> cardinality = new HashMap<String, Long>();
+        Map<String, String> dataSourceProp = new HashMap<>();
+        String scard = tableExtDesc.getCardinality();
+        if (!StringUtils.isEmpty(scard)) {
+            String[] cards = StringUtils.split(scard, ",");
+            ColumnDesc[] cdescs = rtableDesc.getColumns();
+            for (int i = 0; i < cdescs.length; i++) {
+                ColumnDesc columnDesc = cdescs[i];
+                if (cards.length > i) {
+                    cardinality.put(columnDesc.getName(), Long.parseLong(cards[i]));
+                } else {
+                    logger.error("The result cardinality is not identical with hive table metadata, cardinality : " + scard + " column array length: " + cdescs.length);
+                    break;
+                }
+            }
+            rtableDesc.setCardinality(cardinality);
+        }
+        dataSourceProp.putAll(tableExtDesc.getDataSourceProp());
+        dataSourceProp.put("location", tableExtDesc.getStorageLocation());
+        dataSourceProp.put("owner", tableExtDesc.getOwner());
+        dataSourceProp.put("last_access_time", tableExtDesc.getLastAccessTime());
+        dataSourceProp.put("partition_column", tableExtDesc.getPartitionColumn());
+        dataSourceProp.put("total_file_size", tableExtDesc.getTotalFileSize());
+        rtableDesc.setDescExd(dataSourceProp);
+        return rtableDesc;
+    }
+
+
     private List<TableDesc> cloneTableDesc(List<TableDesc> tables) throws IOException {
         List<TableDesc> descs = new ArrayList<TableDesc>();
         Iterator<TableDesc> it = tables.iterator();
         while (it.hasNext()) {
             TableDesc table = it.next();
-            TableExtDesc tableExtDesc = getMetadataManager().getTableExt(table.getIdentity());
-
-            // Clone TableDesc
-            TableDescResponse rtableDesc = new TableDescResponse(table);
-            Map<String, Long> cardinality = new HashMap<String, Long>();
-            Map<String, String> dataSourceProp = new HashMap<>();
-            String scard = tableExtDesc.getCardinality();
-            if (!StringUtils.isEmpty(scard)) {
-                String[] cards = StringUtils.split(scard, ",");
-                ColumnDesc[] cdescs = rtableDesc.getColumns();
-                for (int i = 0; i < cdescs.length; i++) {
-                    ColumnDesc columnDesc = cdescs[i];
-                    if (cards.length > i) {
-                        cardinality.put(columnDesc.getName(), Long.parseLong(cards[i]));
-                    } else {
-                        logger.error("The result cardinality is not identical with hive table metadata, cardinality : " + scard + " column array length: " + cdescs.length);
-                        break;
-                    }
-                }
-                rtableDesc.setCardinality(cardinality);
-            }
-            dataSourceProp.putAll(tableExtDesc.getDataSourceProp());
-            dataSourceProp.put("location", tableExtDesc.getStorageLocation());
-            dataSourceProp.put("owner", tableExtDesc.getOwner());
-            dataSourceProp.put("last_access_time", tableExtDesc.getLastAccessTime());
-            dataSourceProp.put("partition_column", tableExtDesc.getPartitionColumn());
-            dataSourceProp.put("total_file_size", tableExtDesc.getTotalFileSize());
-            rtableDesc.setDescExd(dataSourceProp);
+            TableDescResponse rtableDesc = cloneTableDesc(table);
             descs.add(rtableDesc);
         }
 

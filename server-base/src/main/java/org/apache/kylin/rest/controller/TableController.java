@@ -24,12 +24,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.kylin.common.util.JsonUtil;
 import org.apache.kylin.metadata.model.TableDesc;
 import org.apache.kylin.rest.exception.InternalErrorException;
+import org.apache.kylin.rest.exception.NotFoundException;
 import org.apache.kylin.rest.request.CardinalityRequest;
 import org.apache.kylin.rest.request.HiveTableRequest;
-import org.apache.kylin.rest.request.StreamingRequest;
 import org.apache.kylin.rest.service.TableService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -66,14 +65,12 @@ public class TableController extends BasicController {
     @RequestMapping(value = "", method = { RequestMethod.GET })
     @ResponseBody
     public List<TableDesc> getTableDesc(@RequestParam(value = "ext", required = false) boolean withExt, @RequestParam(value = "project", required = true) String project) throws IOException {
-        List<TableDesc> tables = null;
         try {
-            tables = tableService.getTableDescByProject(project, withExt);
+            return tableService.getTableDescByProject(project, withExt);
         } catch (IOException e) {
             logger.error("Failed to get Hive Tables", e);
             throw new InternalErrorException(e.getLocalizedMessage());
         }
-        return tables;
     }
 
     /**
@@ -85,21 +82,28 @@ public class TableController extends BasicController {
     @RequestMapping(value = "/{tableName:.+}", method = { RequestMethod.GET })
     @ResponseBody
     public TableDesc getTableDesc(@PathVariable String tableName) {
-        return tableService.getTableDescByName(tableName);
+        TableDesc table = tableService.getTableDescByName(tableName, false);
+        if (table == null)
+            throw new NotFoundException("Could not find Hive table: " + tableName);
+        return table;
     }
 
     @RequestMapping(value = "/{tables}/{project}", method = { RequestMethod.POST })
     @ResponseBody
     public Map<String, String[]> loadHiveTables(@PathVariable String tables, @PathVariable String project, @RequestBody HiveTableRequest request) throws IOException {
         String submitter = SecurityContextHolder.getContext().getAuthentication().getName();
-        String[] tableNames = tables.split(",");
-        String[] loaded = tableService.loadHiveTablesToProject(tableNames, project);
-        if (request.isCalculate()) {
-            tableService.calculateCardinalityIfNotPresent(loaded, submitter);
-        }
         Map<String, String[]> result = new HashMap<String, String[]>();
-        result.put("result.loaded", loaded);
-        result.put("result.unloaded", new String[] {});
+        String[] tableNames = tables.split(",");
+        try {
+            String[] loaded = tableService.loadHiveTablesToProject(tableNames, project);
+            result.put("result.loaded", loaded);
+            if (request.isCalculate()) {
+                tableService.calculateCardinalityIfNotPresent(loaded, submitter);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to load Hive Table", e);
+            throw new InternalErrorException(e.getLocalizedMessage());
+        }
         return result;
     }
 
@@ -109,26 +113,20 @@ public class TableController extends BasicController {
         Set<String> unLoadSuccess = Sets.newHashSet();
         Set<String> unLoadFail = Sets.newHashSet();
         Map<String, String[]> result = new HashMap<String, String[]>();
-        for (String tableName : tables.split(",")) {
-            if (tableService.unLoadHiveTable(tableName, project)) {
-                unLoadSuccess.add(tableName);
-            } else {
-                unLoadFail.add(tableName);
+        try {
+            for (String tableName : tables.split(",")) {
+                if (tableService.unLoadHiveTable(tableName, project)) {
+                    unLoadSuccess.add(tableName);
+                } else {
+                    unLoadFail.add(tableName);
+                }
             }
+        } catch (Exception e) {
+            logger.error("Failed to unload Hive Table", e);
+            throw new InternalErrorException(e.getLocalizedMessage());
         }
         result.put("result.unload.success", (String[]) unLoadSuccess.toArray(new String[unLoadSuccess.size()]));
         result.put("result.unload.fail", (String[]) unLoadFail.toArray(new String[unLoadFail.size()]));
-        return result;
-    }
-
-    @RequestMapping(value = "/addStreamingSrc", method = { RequestMethod.POST })
-    @ResponseBody
-    public Map<String, String> addStreamingTable(@RequestBody StreamingRequest request) throws IOException {
-        Map<String, String> result = new HashMap<String, String>();
-        String project = request.getProject();
-        TableDesc desc = JsonUtil.readValue(request.getTableData(), TableDesc.class);
-        tableService.addStreamingTable(desc, project);
-        result.put("success", "true");
         return result;
     }
 
@@ -143,8 +141,13 @@ public class TableController extends BasicController {
     public CardinalityRequest generateCardinality(@PathVariable String tableNames, @RequestBody CardinalityRequest request) throws IOException {
         String submitter = SecurityContextHolder.getContext().getAuthentication().getName();
         String[] tables = tableNames.split(",");
-        for (String table : tables) {
-            tableService.calculateCardinality(table.trim().toUpperCase(), submitter);
+        try {
+            for (String table : tables) {
+                tableService.calculateCardinality(table.trim().toUpperCase(), submitter);
+            }
+        } catch (IOException e) {
+            logger.error("Failed to calculate cardinality", e);
+            throw new InternalErrorException(e.getLocalizedMessage());
         }
         return request;
     }
@@ -158,13 +161,11 @@ public class TableController extends BasicController {
     @RequestMapping(value = "/hive", method = { RequestMethod.GET })
     @ResponseBody
     private List<String> showHiveDatabases() throws IOException {
-        List<String> results = null;
         try {
-            results = tableService.getHiveDbNames();
+            return tableService.getHiveDbNames();
         } catch (Exception e) {
-            throw new IOException(e);
+            throw new InternalErrorException(e.getLocalizedMessage());
         }
-        return results;
     }
 
     /**
@@ -176,14 +177,11 @@ public class TableController extends BasicController {
     @RequestMapping(value = "/hive/{database}", method = { RequestMethod.GET })
     @ResponseBody
     private List<String> showHiveTables(@PathVariable String database) throws IOException {
-        List<String> results = null;
-
         try {
-            results = tableService.getHiveTableNames(database);
+            return tableService.getHiveTableNames(database);
         } catch (Exception e) {
-            throw new IOException(e);
+            throw new InternalErrorException(e.getLocalizedMessage());
         }
-        return results;
     }
 
 }
